@@ -21,6 +21,7 @@
   <script type="module">
     import * as THREE from 'three';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 1000);
@@ -29,37 +30,65 @@
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(innerWidth, innerHeight);
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-    renderer.outputColorSpace = THREE.SRGBColorSpace; // correct color output
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; // filmic rolloff, softer highlights
+    renderer.toneMappingExposure = 1.1;
     document.body.appendChild(renderer.domElement);
 
-    // Lighting (PBR materials need it or the model renders black)
-    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const key = new THREE.DirectionalLight(0xffffff, 1.2);
-    key.position.set(5, 5, 5);
+    // Environment lighting: gives the material soft reflections to pick up.
+    // This is the single biggest upgrade for an organic look.
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+    // Three-point-ish rig with warm/cool contrast (skin & tissue read as living
+    // when one side is warm and the shadow side is cool, not neutral grey).
+    const key = new THREE.DirectionalLight(0xfff1e6, 1.4);   // warm key
+    key.position.set(4, 5, 5);
     scene.add(key);
 
-    // Load the color texture once, reuse for every mesh
+    const fill = new THREE.DirectionalLight(0x88aaff, 0.5);  // cool fill, opposite side
+    fill.position.set(-5, 0, 2);
+    scene.add(fill);
+
+    const rim = new THREE.DirectionalLight(0xffffff, 0.8);   // rim/back light for edge glow
+    rim.position.set(0, 3, -6);
+    scene.add(rim);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.15));        // very low — env does the heavy lifting
+
     const texture = new THREE.TextureLoader().load('brain-sphere-02-texColor.png');
-    texture.flipY = false;                     // glTF expects unflipped textures
-    texture.colorSpace = THREE.SRGBColorSpace; // color/albedo maps are sRGB
+    texture.flipY = false;
+    texture.colorSpace = THREE.SRGBColorSpace;
 
     let model;
     new GLTFLoader().load('brain-sphere_02.gltf', (gltf) => {
       model = gltf.scene;
 
-      // Apply the texture to all meshes (harmless if the glTF already has it)
       model.traverse((child) => {
         if (child.isMesh) {
-          child.material.map = texture;
-          child.material.needsUpdate = true;
+          const m = child.material;
+          m.map = texture;
+
+          // Material tuning for an organic, fleshy surface:
+          m.roughness = 0.55;       // not glossy plastic, not chalk-dry
+          m.metalness = 0.0;        // tissue is never metallic
+          m.envMapIntensity = 1.0;  // let it catch the environment
+
+          // Subsurface-ish sheen: a faint warm glow as if light scatters through it.
+          // sheen is supported on MeshPhysicalMaterial; safe to set even on Standard
+          // (ignored if unsupported).
+          m.sheen = 1.0;
+          m.sheenRoughness = 0.8;
+          m.sheenColor = new THREE.Color(0xff6655);
+
+          m.needsUpdate = true;
         }
       });
 
-      // Center the model and scale it to fit the view
       const box = new THREE.Box3().setFromObject(model);
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
-      model.position.sub(center);                       // recenter at origin
+      model.position.sub(center);
       const scale = 2.5 / Math.max(size.x, size.y, size.z);
       model.scale.setScalar(scale);
 
@@ -69,7 +98,7 @@
     const clock = new THREE.Clock();
     function animate() {
       requestAnimationFrame(animate);
-      if (model) model.rotation.y += clock.getDelta() * 0.3; // slow spin, ~3.5s/turn
+      if (model) model.rotation.y += clock.getDelta() * 0.3;
       renderer.render(scene, camera);
     }
     animate();
